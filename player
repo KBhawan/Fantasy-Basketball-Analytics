@@ -1,0 +1,87 @@
+# import libraries 
+import pandas as pd     # for tables
+from datetime import date   # to track players on a day-to-day basis
+import sqlite3  # for SQLite (saved database)
+from nba_api.stats.endpoints import leaguedashplayerstats   # retrieving nba player stats
+
+
+# define the categories in the fantasy league (8-cat)
+ALL_CATS = ['PTS', 'REB', 'AST', 'STL', 'BLK', 'FG3M', 'FG_PCT', 'FT_PCT']
+
+
+# ask the user for their specific category they are punting
+print("\n--- 8-CAT RANKING TOOL (NO TURNOVERS) ---")
+print(f"Categories: {', '.join(ALL_CATS)}")
+print("Instructions: Type the codes of categories you want to PUNT (ignore).")
+print("Example: To punt Free Throws, type: FT_PCT")
+
+user_input = input("\nEnter categories to PUNT (or press Enter for none): ")
+
+# processes the input
+if user_input.strip() == "":
+    punt_categories = []
+else:
+    punt_categories = [x.strip().upper() for x in user_input.split(',')]    # helps clean up input by seperating with commas and capitlizing the input to match CAT names (all uppercase)
+
+# validates the inputs to ensure the category chosen by user is in it 
+valid_punts = [c for c in punt_categories if c in ALL_CATS]
+print(f"\n> OK! Calculating rankings while IGNORING: {valid_punts}...")
+
+# fetches the data for nba players regarding their last 7 games
+stats = leaguedashplayerstats.LeagueDashPlayerStats(    # specific endpoint that returns a list of all NBA players (from api)
+    per_mode_detailed='PerGame',
+    season='2025-26',
+    last_n_games=7
+)
+df = stats.get_data_frames()[0]     # stores the raw data in the Pandas DataFrame (table)
+
+# calculations of Z-Scores
+# filters out players that hasn't played at least 3 games and doesnt average more than 20 min a game to filter out any anamolies 
+df = df[df['GP'] >= 3].copy()       # quick note: .copy() creates a new independent table to avoid "SettingWithCopy" error that would reference the original table
+df = df[df['MIN'] >= 20].copy()
+
+for cat in ALL_CATS:        # loops through every category to find the league average mean and std. deviation because for example 2 blocks is more meaningful than someone who averages 20 points, so we must take the league average consideration for that
+    avg = df[cat].mean()
+    std = df[cat].std()
+    
+    if std == 0:
+        df[f'Z_{cat}'] = 0      # case check from preventing the server to crash if dividing by 0
+    else:
+        df[f'Z_{cat}'] = (df[cat] - avg) / std   # z-formula is (player's average - league average) / league std. deviation   
+
+# calculation of total values
+active_cats = [c for c in ALL_CATS if c not in valid_punts]     # excludes the category the user intends to punt
+z_cols = [f'Z_{c}' for c in active_cats]
+
+df['TOTAL_VALUE'] = df[z_cols].sum(axis=1)      # adds up z-scores horizontally for each player with the remaining categories
+
+# display results
+rankings = df.sort_values(by='TOTAL_VALUE', ascending=False)
+cols_to_show = ['PLAYER_NAME', 'TOTAL_VALUE'] + active_cats
+
+print(f"\n--- TOP PLAYERS (PUNTING: {valid_punts}) ---")
+display(rankings[cols_to_show].head(50))
+
+# SQLite integration
+
+# prepare the data for storage
+rankings['snapshot_date'] = date.today()    #  add a "Snapshot Date" so we can track trends over time
+rankings['punt_strategy'] = str(valid_punts)       #  add the strategy used so we don't get confused later
+
+
+# keep the columns we  want to save (clean up the table)
+save_cols = ['snapshot_date', 'punt_strategy', 'PLAYER_NAME', 'TOTAL_VALUE', 'GP', 'MIN'] + ALL_CATS
+final_db_table = rankings[save_cols].copy()
+
+# connects to database (Creates 'fantasy_history.db' if it doesn't exist)
+conn = sqlite3.connect('fantasy_history.db')
+
+# save the data
+final_db_table.to_sql('player_rankings', conn, if_exists='append', index=False)     # dumps the pandas table into SQL & adds new rows to the bottom of the table w/o deleting old history
+
+print(f"\nSUCCESS: Saved top {len(final_db_table)} players to 'fantasy_history.db'!")
+print("--- TOP 5 PREVIEW ---")
+display(final_db_table.head(5))
+
+# D. Close connection
+conn.close()
