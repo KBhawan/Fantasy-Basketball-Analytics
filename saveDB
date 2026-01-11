@@ -1,0 +1,23 @@
+import sqlite3
+import pandas as pd
+
+# connect to your database
+conn = sqlite3.connect('fantasy_history.db')
+
+# find a specific player's history
+player_name = "Kawhi Leonard" 
+
+# specific values to see when analyzing player's performace over a day-to-day basis
+query = f"""
+SELECT snapshot_date, punt_strategy, TOTAL_VALUE, PTS, REB, AST 
+FROM player_rankings
+WHERE PLAYER_NAME = '{player_name}'
+ORDER BY snapshot_date ASC
+"""
+
+# load into pandas and display
+history_df = pd.read_sql(query, conn)   # takes SQL query, sends to database and converts to pandas dataframe
+print(f"--- History for {player_name} ---")
+display(history_df)
+
+conn.close()
